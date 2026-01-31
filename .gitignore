@@ -5,3 +5,4 @@ show-dir
 work-dir
 .venv
 .mypy_cache
+results.xlsx
