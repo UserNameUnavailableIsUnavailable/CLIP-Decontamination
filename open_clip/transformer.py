@@ -880,6 +880,11 @@ class VisionTransformer(nn.Module):
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
             vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
+            qq_kk_attn = (qq_attn + kk_attn) / 2.0
+            qq_kk_attn_norm = F.normalize(qq_kk_attn.view(qq_kk_attn.size(0), -1), dim=-1)
+            vv_attn_norm = F.normalize(vv_attn.view(vv_attn.size(0), -1), dim=-1)
+            sim = (qq_kk_attn_norm * vv_attn_norm).sum(dim=-1, keepdim=True)  # [bsz*num_heads, 1]
+            vv_attn = sim.view(-1, 1, 1) * vv_attn # [bsz*num_heads, N, N]
             attn_weights = F.softmax((qq_attn + kk_attn) / 2.0, dim=-1) + F.softmax(vv_attn, dim=-1)
         elif model_type == 'ClearCLIP':
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
