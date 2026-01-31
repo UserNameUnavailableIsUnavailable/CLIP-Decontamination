@@ -22,11 +22,11 @@ class SimilarityEnhancementModule(nn.Module):
     to compensate for feature contamination.
     
     Args:
-        temperature: Temperature for softmax over similarities (default: 0.1)
+        temperature: Temperature for softmax over similarities (default: 1.0)
         add_self_similarity: Whether to include self-similarity in the map (default: False)
     """
     
-    def __init__(self, temperature=0.1, add_self_similarity=False):
+    def __init__(self, temperature=1.0, add_self_similarity=False):
         super().__init__()
         self.temperature = temperature
         self.add_self_similarity = add_self_similarity

@@ -872,6 +872,10 @@ class VisionTransformer(nn.Module):
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
             vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
             attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1) + F.softmax(vv_attn, dim=-1)
+        elif model_type == "SFP":
+            qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
+            kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
+            attn_weights = F.softmax(0.5 * (qq_attn + kk_attn), dim=-1)
         elif model_type == 'ClearCLIP':
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             attn_weights = F.softmax(qq_attn, dim=-1)
