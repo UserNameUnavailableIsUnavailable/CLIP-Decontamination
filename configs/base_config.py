@@ -1,12 +1,12 @@
 # base configurations
 model = dict(
     type='SegmentorEx',
-    clip_type='CLIP',     # 'CLIP', 'BLIP', 'OpenCLIP', 'MetaCLIP', 'ALIP', 'SkyCLIP', 'GeoRSCLIP', 'RemoteCLIP'
-    vit_type='ViT-B/16',      # 'ViT-B/16', 'ViT-L-14'
-    model_type='SFP',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth'
+    clip_type='CLIP',
+    vit_type='ViT-B/16',
+    model_type='SFP',
     ignore_residual=True,
     apply_sim_feat_up=False,
-    global_debias_factor=0.0,
+    global_debias_factor=0.3,
     cls_token_lambda=0.0,
     apply_outlier_suppression=True,
     outlier_suppression_cfg=dict(
