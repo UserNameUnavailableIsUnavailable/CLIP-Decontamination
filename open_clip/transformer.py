@@ -881,6 +881,13 @@ class VisionTransformer(nn.Module):
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
             vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
             attn_weights = F.softmax((qq_attn + kk_attn + vv_attn) / 3.0, dim=-1)
+        # ...inside VisionTransformer.custom_attn...
+        elif model_type == "QKVProduct":
+            qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
+            kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
+            vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
+            attn_weights = F.softmax(qq_attn, dim=-1) * F.softmax(kk_attn, dim=-1) * F.softmax(vv_attn, dim=-1)
+            attn_weights = attn_weights / (attn_weights.sum(dim=-1, keepdim=True) + 1e-8)  # Normalize
         elif model_type == 'ClearCLIP':
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             attn_weights = F.softmax(qq_attn, dim=-1)
