@@ -1,0 +1,7 @@
+.vscode
+__pycache__
+payload
+show-dir
+work-dir
+.venv
+.mypy_cache
