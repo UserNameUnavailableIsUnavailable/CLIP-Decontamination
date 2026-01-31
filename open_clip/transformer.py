@@ -615,13 +615,7 @@ class VisionTransformer(nn.Module):
             
             if ignore_residual:
                 output += self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
-                x = blk(x)
-            else:
-                x_out = x + self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
-                x_out = x_out + blk.mlp(blk.ln_2(x_out))
-                output += x_out
-                
-                # For attention-based layer fusion, always capture attention maps
+                # For attention-based layer fusion, capture attention maps
                 if apply_layer_fusion:
                     x, current_attn = blk(x, need_weights=True)
                     
@@ -632,6 +626,11 @@ class VisionTransformer(nn.Module):
                         attn_accumulated = layer_fusion_lambda * attn_accumulated + (1 - layer_fusion_lambda) * current_attn
                 else:
                     x = blk(x)
+            else:
+                x_out = x + self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
+                x_out = x_out + blk.mlp(blk.ln_2(x_out))
+                output += x_out
+                x = blk(x)
         
         # Process fused attention maps: mask outliers and normalize
         if apply_layer_fusion and attn_accumulated is not None and hasattr(self, 'outlier_suppressor') and self.outlier_suppressor is not None:
@@ -697,6 +696,29 @@ class VisionTransformer(nn.Module):
             # Recombine with CLS token
             output_enhanced = torch.cat([cls_token, enhanced_patches], dim=1)
             output = output_enhanced.permute(1, 0, 2)  # Back to LND
+
+        # Apply self-attention enhancement if enabled (before outlier suppression)
+        if hasattr(self, 'self_attn_enhancer') and self.self_attn_enhancer is not None and attn_weights is not None:
+            # Convert to NLD format for enhancement module
+            output_nld = output.permute(1, 0, 2)  # [B, L, D]
+            
+            # Separate CLS token and patch tokens
+            cls_token = output_nld[:, 0:1, :]  # [B, 1, D]
+            patch_tokens = output_nld[:, 1:, :]  # [B, num_patches, D]
+            
+            # Reshape patch tokens to spatial grid [B, D, H, W]
+            B, num_patches, D = patch_tokens.shape
+            patch_features = patch_tokens.permute(0, 2, 1).reshape(B, D, grid_size, grid_size)
+            
+            # Apply self-attention enhancement
+            enhanced_features = self.self_attn_enhancer(patch_features, attn_weights, grid_size, grid_size)
+            
+            # Reshape back to sequence [B, num_patches, D]
+            patch_tokens_enhanced = enhanced_features.reshape(B, D, num_patches).permute(0, 2, 1)
+            
+            # Recombine with CLS token
+            output_enhanced_self_attn = torch.cat([cls_token, patch_tokens_enhanced], dim=1)
+            output = output_enhanced_self_attn.permute(1, 0, 2)  # Back to LND
 
         # Apply outlier suppression if enabled and attention weights were captured
         if hasattr(self, 'outlier_suppressor') and self.outlier_suppressor is not None and attn_weights is not None:

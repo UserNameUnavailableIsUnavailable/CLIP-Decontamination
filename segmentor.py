@@ -51,6 +51,8 @@ class SegmentorEx(BaseSegmentor):
                  apply_ctd=False,
                  apply_outlier_suppression=False,
                  outlier_suppression_cfg=None,
+                 apply_self_attn_enhancement=False,
+                 self_attn_enhancement_cfg=None,
                  apply_layer_fusion=False,
                  layer_fusion_lambda=0.5,
                  layer_fusion_threshold=0.7,
@@ -215,6 +217,35 @@ class SegmentorEx(BaseSegmentor):
             
             print(f"[Similarity Enhancement] Enabled with temperature={default_sim_cfg['temperature']} (training-free)")
         
+        # Self-Attention Enhancement: Boosts self-attention for tokens with weak self-attention
+        self.apply_self_attn_enhancement = apply_self_attn_enhancement
+        
+        if self.apply_self_attn_enhancement:
+            from self_attention_enhancement import SelfAttentionEnhancementModule
+            
+            # Default configuration
+            default_self_attn_cfg = dict(
+                enhancement_strength=0.1,  # How much to enhance (0.1 = mild, 0.3 = strong)
+                min_self_attn_threshold=0.15,  # Tokens below this get enhanced
+                mode='feature'  # 'feature' or 'attention'
+            )
+            if self_attn_enhancement_cfg:
+                default_self_attn_cfg.update(self_attn_enhancement_cfg)
+            
+            self_attn_enhancer = SelfAttentionEnhancementModule(
+                enhancement_strength=default_self_attn_cfg['enhancement_strength'],
+                min_self_attn_threshold=default_self_attn_cfg['min_self_attn_threshold'],
+                mode=default_self_attn_cfg['mode']
+            ).to(device)
+            
+            # Set enhancer on vision transformer
+            if self.clip_type != 'BLIP':
+                self.net.visual.self_attn_enhancer = self_attn_enhancer
+            else:
+                self.net.visual_encoder.self_attn_enhancer = self_attn_enhancer
+            
+            print(f"[Self-Attention Enhancement] Enabled with strength={default_self_attn_cfg['enhancement_strength']}, threshold={default_self_attn_cfg['min_self_attn_threshold']}, mode={default_self_attn_cfg['mode']}")
+        
         # Outlier Suppression: Detects and replaces outliers based on attention weights
         self.apply_outlier_suppression = apply_outlier_suppression
         
@@ -224,14 +255,12 @@ class SegmentorEx(BaseSegmentor):
             # Default configuration
             default_outlier_cfg = dict(
                 top_k=10,  # Number of outlier tokens to suppress per image
-                contamination_temp=1.0,  # Temperature for neighbor decontamination
             )
             if outlier_suppression_cfg:
                 default_outlier_cfg.update(outlier_suppression_cfg)
             
             suppressor = OutlierSuppressionModule(
-                top_k=default_outlier_cfg['top_k'],
-                contamination_temp=default_outlier_cfg['contamination_temp'],
+                top_k=default_outlier_cfg['top_k']
             ).to(device)
             
             # Set suppressor on vision transformer
@@ -240,7 +269,7 @@ class SegmentorEx(BaseSegmentor):
             else:
                 self.net.visual_encoder.outlier_suppressor = suppressor
             
-            print(f"[Outlier Suppression] Enabled with top_k={default_outlier_cfg['top_k']}, contamination_temp={default_outlier_cfg['contamination_temp']}")
+            print(f"[Outlier Suppression] Enabled with top_k={default_outlier_cfg['top_k']}")
         self.result_dir = result_dir
         self.heatmap_dir = heatmap_dir
         

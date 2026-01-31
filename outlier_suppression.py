@@ -71,11 +71,11 @@ class OutlierSuppressionModule(nn.Module):
     
     Args:
         top_k: number of outlier tokens to suppress per image (default: 10)
-        contamination_temp: temperature for contamination removal (default: 1.0)
+        contamination_temp: temperature for contamination removal (default: 0.5)
                           Higher = milder removal, Lower = aggressive removal
     """
     
-    def __init__(self, top_k: int = 10, contamination_temp: float = 1.0):
+    def __init__(self, top_k: int = 10, contamination_temp: float = 0.1):
         super().__init__()
         self.top_k = top_k
         self.contamination_temp = contamination_temp
@@ -200,19 +200,13 @@ class OutlierSuppressionModule(nn.Module):
             outlier_contamination = outlier_feats.unsqueeze(1) * contamination_strength.unsqueeze(2)  # [num_outliers, 8, C]
             neighbor_feats_clean = neighbor_feats - outlier_contamination
             
-            # Update neighbor positions with decontaminated features (vectorized)
-            # Create mask for valid neighbors (not same as outlier position)
-            neighbor_valid = (neighbor_coords[..., 0] != outlier_coords[:, 0].unsqueeze(1)) | \
-                           (neighbor_coords[..., 1] != outlier_coords[:, 1].unsqueeze(1))  # [num_outliers, 8]
-            
-            # Flatten and filter valid neighbors
-            valid_mask = neighbor_valid.flatten()  # [num_outliers * 8]
-            valid_neighbor_coords = neighbor_coords.reshape(-1, 2)[valid_mask]  # [num_valid, 2]
-            valid_neighbor_feats = neighbor_feats_clean.reshape(-1, C)[valid_mask]  # [num_valid, C]
-            
-            # Update all valid neighbors at once using advanced indexing
-            if valid_neighbor_coords.shape[0] > 0:
-                result[b, :, valid_neighbor_coords[:, 0], valid_neighbor_coords[:, 1]] = valid_neighbor_feats.T
+            # Update neighbor positions with decontaminated features
+            for i in range(num_outliers):
+                for j in range(8):
+                    ny, nx = neighbor_coords[i, j, 0].item(), neighbor_coords[i, j, 1].item()
+                    # Only update if it's a valid neighbor position (not clamped to same outlier)
+                    if ny != outlier_coords[i, 0].item() or nx != outlier_coords[i, 1].item():
+                        result[b, :, ny, nx] = neighbor_feats_clean[i, j]
             
             # Update outlier positions with weighted average
             result[b, :, outlier_coords[:, 0], outlier_coords[:, 1]] = weighted_avg.T

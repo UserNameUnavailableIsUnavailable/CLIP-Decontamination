@@ -3,18 +3,23 @@ model = dict(
     type='SegmentorEx',
     clip_type='CLIP',     # 'CLIP', 'BLIP', 'OpenCLIP', 'MetaCLIP', 'ALIP', 'SkyCLIP', 'GeoRSCLIP', 'RemoteCLIP'
     vit_type='ViT-B/16',      # 'ViT-B/16', 'ViT-L-14'
-    model_type='vanilla',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth'
+    model_type='SegEarth',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth'
     ignore_residual=True,
     apply_sim_feat_up=False,
-    global_debias_factor=0.3,
+    global_debias_factor=0.0,
     cls_token_lambda=0.0,
     apply_outlier_suppression=True,
     outlier_suppression_cfg=dict(
         top_k=10,
-        contamination_temp=0.1
+    ),
+    apply_self_attn_enhancement=False,
+    self_attn_enhancement_cfg=dict(
+        enhancement_strength=0.1,
+        min_self_attn_threshold=0.15,
+        mode='feature',  # 'feature' or 'attention'
     ),
     apply_layer_fusion=False,
-    layer_fusion_lambda=0.5,
+    layer_fusion_lambda=0.05,
     layer_fusion_threshold=0.7,
     apply_similarity_enhancement=True,
     sim_feat_up_cfg=dict(
