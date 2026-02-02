@@ -4,14 +4,13 @@ _base_ = './base_config.py'
 
 # model settings
 model = dict(
-    name_path='./configs/cls_potsdam.txt',
-    prob_thd=0.1,
-    bg_idx=5,
+    name_path='./configs/cls_isaid.txt',
+    prob_thd=0.4,
 )
 
 # dataset settings
-dataset_type = 'ISPRSDataset'
-data_root = os.path.abspath('payload/datasets/Potsdam')
+dataset_type = 'iSAIDDataset'
+data_root = os.path.abspath('payload/datasets/iSAID')
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
@@ -27,7 +26,8 @@ test_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_root=data_root,
+        reduce_zero_label=False,
         data_prefix=dict(
-            img_path=f"{data_root}/images/validation",
-            seg_map_path=f"{data_root}/annotations/validation"),
+            img_path=f'{data_root}/images/validation',
+            seg_map_path=f'{data_root}/annotations/validation'),
         pipeline=test_pipeline))

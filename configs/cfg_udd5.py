@@ -1,3 +1,4 @@
+import os
 _base_ = './base_config.py'
 
 # model settings
@@ -9,13 +10,10 @@ model = dict(
 
 # dataset settings
 dataset_type = 'UDD5Dataset'
-data_root = ''
+data_root = os.path.abspath('payload/datasets/UDD/UDD5')
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(448, 448), keep_ratio=True),
-    # add loading annotation after ``Resize`` because ground truth
-    # does not need to do resize data transform
     dict(type='LoadAnnotations'),
     dict(type='PackSegInputs')
 ]
@@ -28,6 +26,6 @@ test_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            img_path='data/UDD/UDD/UDD5/val/src',
-            seg_map_path='data/UDD/UDD/UDD5/val/gt'),
+            img_path=f'{data_root}/val/src',
+            seg_map_path=f'{data_root}/val/gt'),
         pipeline=test_pipeline))

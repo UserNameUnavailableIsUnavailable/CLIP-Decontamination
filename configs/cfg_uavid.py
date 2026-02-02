@@ -1,3 +1,5 @@
+import os
+
 _base_ = './base_config.py'
 
 # model settings
@@ -8,13 +10,11 @@ model = dict(
 
 # dataset settings
 dataset_type = 'UAVidDataset'
-data_root = ''
+data_root = 'UAVid'
+data_root = os.path.abspath('payload/datasets/UAVid')
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(448, 448), keep_ratio=True),
-    # add loading annotation after ``Resize`` because ground truth
-    # does not need to do resize data transform
     dict(type='LoadAnnotations'),
     dict(type='PackSegInputs')
 ]
@@ -27,6 +27,6 @@ test_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            img_path='data/UAVid/img_dir/test',
-            seg_map_path='data/UAVid/ann_dir/test'),
+            img_path=f'{data_root}/images/validation',
+            seg_map_path=f'{data_root}/annotations/validation'),
         pipeline=test_pipeline))

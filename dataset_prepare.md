@@ -194,8 +194,6 @@ The data could be downloaded from [here](https://github.com/MarcWong/UDD).
 
 The data could be downloaded from [here](https://github.com/RussRobin/VDD).
 
-
-
 # Building Extraction
 
 ## WHU Building Dataset (Aerial & SatⅡ)
@@ -270,8 +268,3 @@ More details about Massachusetts can be found [here](https://spacenet.ai/spacene
 The data could be downloaded from [here](https://www.kaggle.com/datasets/shirshmall/water-body-segmentation-in-satellite-images).
 
 Use the filenames listed in ``tools/dataset_converters/wbs-si_val.txt`` as the validation set.
-
-
-
-
-

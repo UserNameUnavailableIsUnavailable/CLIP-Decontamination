@@ -1,3 +1,5 @@
+import os
+
 _base_ = './base_config.py'
 
 # model settings
@@ -8,8 +10,8 @@ model = dict(
 )
 
 # dataset settings
-dataset_type = 'PotsdamDataset'
-data_root = ''
+dataset_type = 'ISPRSDataset'
+data_root = os.path.abspath('payload/datasets/Potsdam')
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
@@ -26,6 +28,6 @@ test_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            img_path='data/potsdam/img_dir/val',
-            seg_map_path='data/potsdam/ann_dir/val'),
+            img_path=f"{data_root}/images/validation",
+            seg_map_path=f"{data_root}/annotations/validation"),
         pipeline=test_pipeline))
