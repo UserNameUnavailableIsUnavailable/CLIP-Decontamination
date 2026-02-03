@@ -1,6 +1,8 @@
 .vscode
 __pycache__
 payload
+show-dirs
+work-dirs
 show-dir
 work-dir
 .venv

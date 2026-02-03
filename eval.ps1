@@ -1,20 +1,51 @@
-$config_dir_base = "configs"
-$work_dir_base = "work-dir"
-$show_dir_base = "show-dir"
-
-$configs = @(
-    "cfg_isaid",
-    "cfg_loveda",
-    "cfg_potsdam",
-    "cfg_vaihingen",
-    "cfg_uavid",
-    "cfg_udd5",
-    "cfg_vdd"
+param(
+    [Parameter(Mandatory=$false, Position=0)]
+    [String[]]$Datasets,
+    [String]$WorkDir = "work-dirs",
+    [String]$ShowDir = "show-dirs",
+    [Parameter(Mandatory=$false)]
+    [Switch]$All
 )
 
-$configs | ForEach-Object {
-    $config = Join-Path $config_dir_base ($_ + ".py")
-    $work_dir = Join-Path $work_dir_base $_
-    $show_dir = Join-Path $show_dir_base $_
-    python eval.py --config $config --work-dir $work_dir --save-seg-dir "$show_dir/segs" --save-heatmap-dir "$show_dir/heatmaps"
+enum DatasetType {
+    iSAID
+    LoveDA
+    Potsdam
+    Vaihingen
+    UAVid
+    UDD5
+    VDD
+}
+
+$ErrorActionPreference = "Stop"
+
+if ($All) {
+    $Datasets = [DatasetType].GetEnumNames()
+}
+
+if ($Datasets.Count -eq 0) {
+    Write-Error "Please specify at least one dataset or use the -All flag."
+    exit 1
+}
+
+$Datasets = $Datasets | ForEach-Object { [DatasetType]::Parse([DatasetType], $_) }
+
+Write-Host "Evaluating datasets: $($Datasets -join ', ')."
+
+function EvaluateDataset {
+    param([DatasetType]$DatasetName)
+    $cfg = GetDatasetConfig -Name $DatasetName.ToString()
+    $work_dir = Join-Path $WorkDir $DatasetName.ToString()
+    $show_dir = Join-Path $ShowDir $DatasetName.ToString()
+    python eval.py --config $cfg --work-dir $work_dir --save-seg-dir "$show_dir/segs" --save-heatmap-dir "$show_dir/heatmaps"
+}
+function GetDatasetConfig {
+    param(
+        [String]$Name
+    )
+    return (Join-Path "configs" ("cfg_" + $Name.ToLower() + ".py")).ToString()
+}
+
+$Datasets | ForEach-Object {
+    EvaluateDataset -DatasetName $_
 }
