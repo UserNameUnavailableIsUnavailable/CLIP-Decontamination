@@ -192,19 +192,21 @@ class SegmentorEx(BaseSegmentor):
         if apply_layer_fusion:
             print(f"[Layer Fusion] Enabled with lambda={layer_fusion_lambda}, threshold={layer_fusion_threshold}")
         
-        # Similarity-based feature enhancement using mid-layer similarity map
+        # Similarity-based attention enhancement: adds self-similarity map to attention weights
         self.apply_similarity_enhancement = apply_similarity_enhancement
         if apply_similarity_enhancement:
             from similarity_enhancement import SimilarityEnhancementModule
             
             default_sim_cfg = dict(
-                temperature=0.1,
-                add_self_similarity=False,
+                similarity_weight=1.0,  # Weight for similarity map when adding to attention
+                temperature=1.0,  # Temperature for similarity computation
+                add_self_similarity=True,  # Whether to include diagonal in similarity map
             )
             if similarity_enhancement_cfg:
                 default_sim_cfg.update(similarity_enhancement_cfg)
             
             enhancer = SimilarityEnhancementModule(
+                similarity_weight=default_sim_cfg['similarity_weight'],
                 temperature=default_sim_cfg['temperature'],
                 add_self_similarity=default_sim_cfg['add_self_similarity'],
             ).to(device)
@@ -215,7 +217,7 @@ class SegmentorEx(BaseSegmentor):
             else:
                 self.net.visual_encoder.similarity_enhancer = enhancer
             
-            print(f"[Similarity Enhancement] Enabled with temperature={default_sim_cfg['temperature']} (training-free)")
+            print(f"[Similarity Enhancement] Enabled: adds self-similarity to attention (weight={default_sim_cfg['similarity_weight']}, temp={default_sim_cfg['temperature']})")
         
         # Self-Attention Enhancement: Boosts self-attention for tokens with weak self-attention
         self.apply_self_attn_enhancement = apply_self_attn_enhancement

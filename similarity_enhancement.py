@@ -1,9 +1,9 @@
 """
-Similarity-based Feature Enhancement Module
+Similarity-based Attention Enhancement Module
 
-Enhances features by adding self-similarity information from mid-layer representations.
-Mid-layer features balance spatial and semantic information, making them ideal
-for computing meaningful patch-to-patch similarities.
+Enhances attention weights by adding self-similarity map computed from mid-layer features.
+The self-similarity map captures patch-to-patch semantic relationships, which when added
+to attention weights, helps emphasize salient features and improve semantic coherence.
 
 This is a completely training-free module with no learnable parameters.
 """
@@ -15,93 +15,120 @@ import torch.nn.functional as F
 
 class SimilarityEnhancementModule(nn.Module):
     """
-    Enhances features by adding self-similarity map computed from mid-layer features.
+    Enhances attention weights by adding self-similarity map from mid-layer features.
     
-    The similarity map M[i,j] = CosSim(x_i, x_j) captures the likelihood that patches
-    i and j belong to the same category. This similarity information is added directly
-    to compensate for feature contamination.
+    The similarity map M[i,j] = CosSim(x_i, x_j) captures semantic relationships between
+    patches. Adding this to attention weights emphasizes connections between semantically
+    similar regions, enhancing salient features.
     
     Args:
-        temperature: Temperature for softmax over similarities (default: 1.0)
-        add_self_similarity: Whether to include self-similarity in the map (default: False)
+        similarity_weight: Weight for similarity map when adding to attention (default: 1.0)
+        temperature: Temperature for similarity computation (default: 1.0)
     """
     
-    def __init__(self, temperature=1.0, add_self_similarity=False):
+    def __init__(self, similarity_weight=1.0, temperature=1.0, add_self_similarity=True):
         super().__init__()
+        self.similarity_weight = similarity_weight
         self.temperature = temperature
         self.add_self_similarity = add_self_similarity
+        # Cache for similarity map to be used during attention computation
+        self.cached_similarity_map = None
     
-    def compute_similarity_map(self, features):
+    def compute_similarity_map(self, features, scale=None):
         """
         Compute pairwise cosine similarity map.
         
         Args:
-            features: [B, N, D] patch features
+            features: [B, N, D] or [L, B, D] patch features
+            scale: Optional scaling factor (like attention scale)
             
         Returns:
-            similarity_map: [B, N, N] pairwise cosine similarities
+            similarity_map: [B, N, N] pairwise cosine similarities (scaled)
         """
+        # Handle LND format (transformer format)
+        if features.dim() == 3 and features.shape[0] < features.shape[1]:
+            # Likely LND format, convert to NLD
+            features = features.permute(1, 0, 2)
+        
         # Normalize features for cosine similarity
-        features_norm = F.normalize(features, p=2, dim=-1)  # [B, N, D]
+        features_norm = F.normalize(features.float(), p=2, dim=-1)  # [B, N, D]
         
         # Compute similarity matrix: M[i,j] = CosSim(x_i, x_j)
         similarity_map = torch.bmm(features_norm, features_norm.transpose(1, 2))  # [B, N, N]
         
-        # Optionally remove self-similarity
+        # Apply temperature scaling
+        similarity_map = similarity_map / self.temperature
+        
+        # Optionally remove self-similarity (diagonal)
         if not self.add_self_similarity:
             B, N = similarity_map.shape[0], similarity_map.shape[1]
-            mask = torch.eye(N, device=similarity_map.device).unsqueeze(0).expand(B, -1, -1)
+            mask = torch.eye(N, device=similarity_map.device, dtype=similarity_map.dtype).unsqueeze(0)
             similarity_map = similarity_map * (1 - mask)
         
         return similarity_map
     
-    def forward(self, final_features, mid_features):
+    def cache_similarity_map(self, mid_features):
         """
-        Forward pass - calibrates features using self-similarity from mid-layer.
-        
-        In self-calibrated CLIP, similarity map is used to:
-        1. Identify high-consensus (confident) regions via similarity scores
-        2. Suppress low-consensus (uncertain) regions
-        3. Refine features by aggregating from high-similarity neighbors
+        Cache the similarity map computed from mid-layer features.
+        This should be called before the custom_attn computation.
         
         Args:
-            final_features: [B, N, D] features to enhance (from final layers)
+            mid_features: [L, B, D] or [B, N, D] features from mid layer
+        """
+        self.cached_similarity_map = self.compute_similarity_map(mid_features)
+    
+    def enhance_attention(self, attn_weights, num_heads=None):
+        """
+        Enhance attention weights by adding cached similarity map.
+        
+        Args:
+            attn_weights: [B*num_heads, N, N] attention weights (before softmax)
+            num_heads: Number of attention heads
+            
+        Returns:
+            enhanced_attn: [B*num_heads, N, N] enhanced attention weights
+        """
+        if self.cached_similarity_map is None:
+            return attn_weights
+        
+        sim_map = self.cached_similarity_map  # [B, N, N]
+        
+        # Expand similarity map to match attention shape [B*num_heads, N, N]
+        if num_heads is not None and attn_weights.shape[0] != sim_map.shape[0]:
+            B = sim_map.shape[0]
+            # Repeat for each head: [B, N, N] -> [B*num_heads, N, N]
+            sim_map = sim_map.unsqueeze(1).expand(-1, num_heads, -1, -1)
+            sim_map = sim_map.reshape(B * num_heads, sim_map.shape[2], sim_map.shape[3])
+        
+        # Convert to same dtype as attention weights
+        sim_map = sim_map.to(attn_weights.dtype)
+        
+        # Add weighted similarity map to attention weights
+        enhanced_attn = attn_weights + self.similarity_weight * sim_map
+        
+        return enhanced_attn
+    
+    def clear_cache(self):
+        """Clear the cached similarity map."""
+        self.cached_similarity_map = None
+    
+    def forward(self, final_features, mid_features):
+        """
+        Forward pass - compute and cache similarity map, return original features.
+        The actual enhancement happens in custom_attn via enhance_attention().
+        
+        Args:
+            final_features: [B, N, D] features (passed through unchanged)
             mid_features: [B, N, D] features from mid layer (for similarity computation)
             
         Returns:
-            enhanced_features: [B, N, D] calibrated features
+            final_features: [B, N, D] unchanged features
         """
-        B, N, D = final_features.shape
-        dtype = final_features.dtype  # Preserve input dtype (e.g., float16)
+        # Cache similarity map for use in attention computation
+        self.cache_similarity_map(mid_features)
         
-        # Compute similarity map from mid-layer features (in float32 for numerical stability)
-        similarity_map = self.compute_similarity_map(mid_features.float())  # [B, N, N]
-        
-        # Compute confidence score for each patch based on maximum similarity to others
-        # High max similarity = patch has confident neighbors with similar semantics
-        # Shape: [B, N]
-        confidence_scores, _ = similarity_map.max(dim=-1)
-        
-        # Apply temperature scaling to similarity map for refinement
-        similarity_map_scaled = similarity_map / self.temperature
-        similarity_weights = F.softmax(similarity_map_scaled, dim=-1)  # [B, N, N]
-        
-        # Aggregate features from similar neighbors (in float32 for bmm stability)
-        # Shape: [B, N, N] @ [B, N, D] -> [B, N, D]
-        refined_features = torch.bmm(similarity_weights, final_features.float())
-        
-        # Self-calibration: Use confidence to modulate between original and refined
-        # Low confidence -> keep original (uncertain, don't change)
-        # High confidence -> use refined (confident consensus exists)
-        confidence_weights = confidence_scores.unsqueeze(-1)  # [B, N, 1]
-        
-        # Calibrated output: blend based on confidence (convert everything back to original dtype)
-        calibrated_features = (
-            confidence_weights.to(dtype) * refined_features.to(dtype) + 
-            (1 - confidence_weights.to(dtype)) * final_features
-        )
-        
-        return calibrated_features
+        # Return features unchanged - enhancement happens in attention
+        return final_features
     
     def get_similarity_map(self, mid_features):
         """

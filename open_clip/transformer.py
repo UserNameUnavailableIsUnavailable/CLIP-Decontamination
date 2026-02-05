@@ -607,6 +607,13 @@ class VisionTransformer(nn.Module):
             else:
                 x = blk(x)
 
+        # Cache similarity map for attention enhancement (before custom_attn is called)
+        if hasattr(self, 'similarity_enhancer') and self.similarity_enhancer is not None and mid_layer_features is not None:
+            # Convert to NLD format and exclude CLS token for similarity computation
+            mid_nld = mid_layer_features.permute(1, 0, 2)  # [B, L, D]
+            mid_patches = mid_nld[:, 1:, :]  # [B, num_patches, D] - exclude CLS
+            self.similarity_enhancer.cache_similarity_map(mid_patches)
+
         output = 0
         total_layers = len(self.transformer.resblocks)
         for i, blk in enumerate(self.transformer.resblocks[-last_n_layers:]):
@@ -679,23 +686,9 @@ class VisionTransformer(nn.Module):
             output = output_weighted.permute(1, 0, 2)  # [L, N, D]
 
 
-        # Apply similarity-based feature enhancement using mid-layer similarity map
-        if hasattr(self, 'similarity_enhancer') and self.similarity_enhancer is not None and mid_layer_features is not None:
-            # Convert to NLD format for enhancement module
-            output_nld = output.permute(1, 0, 2)  # [B, L, D]
-            mid_nld = mid_layer_features.permute(1, 0, 2)  # [B, L, D]
-            
-            # Separate CLS and patches
-            cls_token = output_nld[:, 0:1, :]  # [B, 1, D]
-            patch_features = output_nld[:, 1:, :]  # [B, num_patches, D]
-            mid_patches = mid_nld[:, 1:, :]  # [B, num_patches, D]
-            
-            # Enhance patch features using mid-layer similarities
-            enhanced_patches = self.similarity_enhancer(patch_features, mid_patches)
-            
-            # Recombine with CLS token
-            output_enhanced = torch.cat([cls_token, enhanced_patches], dim=1)
-            output = output_enhanced.permute(1, 0, 2)  # Back to LND
+        # Clear similarity cache after attention computation (cache was used in custom_attn)
+        if hasattr(self, 'similarity_enhancer') and self.similarity_enhancer is not None:
+            self.similarity_enhancer.clear_cache()
 
         # Apply self-attention enhancement if enabled (before outlier suppression)
         if hasattr(self, 'self_attn_enhancer') and self.self_attn_enhancer is not None and attn_weights is not None:
@@ -854,8 +847,15 @@ class VisionTransformer(nn.Module):
             # Reshape to [bsz, num_heads, N, N]
             qk_attn_weights = qk_attn_weights.view(bsz, num_heads, num_tokens, num_tokens)
 
+        # Check if similarity enhancement is enabled
+        has_sim_enhancer = hasattr(self, 'similarity_enhancer') and self.similarity_enhancer is not None
+        cached_sim_map = self.similarity_enhancer.cached_similarity_map if has_sim_enhancer else None
+
         if model_type == 'vanilla':
             qk_attn = torch.bmm(q, k.transpose(1, 2)) * scale
+            # Apply similarity enhancement before softmax
+            if cached_sim_map is not None:
+                qk_attn = self.similarity_enhancer.enhance_attention(qk_attn, num_heads)
             attn_weights = F.softmax(qk_attn, dim=-1)
         elif model_type == 'MaskCLIP':
             mask = torch.empty(q.shape[1], q.shape[1], dtype=q.dtype).to(q.device)
@@ -866,24 +866,44 @@ class VisionTransformer(nn.Module):
         elif model_type == 'SCLIP':
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
+            # Apply similarity enhancement before softmax
+            if cached_sim_map is not None:
+                qq_attn = self.similarity_enhancer.enhance_attention(qq_attn, num_heads)
+                kk_attn = self.similarity_enhancer.enhance_attention(kk_attn, num_heads)
             attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1)
         elif model_type == 'SegEarth':
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
             vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
+            # Apply similarity enhancement before softmax
+            if cached_sim_map is not None:
+                qq_attn = self.similarity_enhancer.enhance_attention(qq_attn, num_heads)
+                kk_attn = self.similarity_enhancer.enhance_attention(kk_attn, num_heads)
+                vv_attn = self.similarity_enhancer.enhance_attention(vv_attn, num_heads)
             attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1) + F.softmax(vv_attn, dim=-1)
         elif model_type == "SFP":
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
-            attn_weights = F.softmax(0.5 * (qq_attn + kk_attn), dim=-1)
+            combined_attn = 0.5 * (qq_attn + kk_attn)
+            # Apply similarity enhancement before softmax
+            if cached_sim_map is not None:
+                combined_attn = self.similarity_enhancer.enhance_attention(combined_attn, num_heads)
+            attn_weights = F.softmax(combined_attn, dim=-1)
         elif model_type == "Experimental":
             # Gated QK attention
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             qq_gate = torch.sigmoid(qq_attn)  # [bsz*num_heads, N, N]
-            attn_weights = F.softmax(qq_gate * kk_attn, dim=-1)
+            gated_attn = qq_gate * kk_attn
+            # Apply similarity enhancement before softmax
+            if cached_sim_map is not None:
+                gated_attn = self.similarity_enhancer.enhance_attention(gated_attn, num_heads)
+            attn_weights = F.softmax(gated_attn, dim=-1)
         elif model_type == 'ClearCLIP':
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
+            # Apply similarity enhancement before softmax
+            if cached_sim_map is not None:
+                qq_attn = self.similarity_enhancer.enhance_attention(qq_attn, num_heads)
             attn_weights = F.softmax(qq_attn, dim=-1)
         elif model_type in ['NACLIP', 'NOnly', 'GAV']:
             self.gaussian_std = 1.0 # 5.0
