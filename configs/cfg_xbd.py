@@ -1,20 +1,18 @@
+import os
 _base_ = './base_config.py'
 
 # model settings
 model = dict(
-    name_path='./configs/cls_whu.txt',
-    prob_thd=0.6,
+    name_path='./configs/cls_xBD.txt',
+    prob_thd=0.0,
 )
 
 # dataset settings
-dataset_type = 'WHUDataset'
-data_root = ''
+dataset_type = 'xBDDataset'
+data_root = os.path.abspath('payload/datasets/xBD')
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(448, 448), keep_ratio=True),
-    # add loading annotation after ``Resize`` because ground truth
-    # does not need to do resize data transform
     dict(type='LoadAnnotations'),
     dict(type='PackSegInputs')
 ]
@@ -28,6 +26,6 @@ test_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            img_path='data/WHU-BD/val/image',
-            seg_map_path='data/WHU-BD/val/label_cvt'),
+            img_path=f'{data_root}/test_images_labels_targets/images',
+            seg_map_path=f'{data_root}/test_images_labels_targets/targets'),
         pipeline=test_pipeline))

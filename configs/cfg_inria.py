@@ -1,3 +1,4 @@
+import os
 _base_ = './base_config.py'
 
 # model settings
@@ -8,13 +9,10 @@ model = dict(
 
 # dataset settings
 dataset_type = 'InriaDataset'
-data_root = ''
+data_root = os.path.abspath('payload/datasets/Inria')
 
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=(448, 448), keep_ratio=True),
-    # add loading annotation after ``Resize`` because ground truth
-    # does not need to do resize data transform
     dict(type='LoadAnnotations'),
     dict(type='PackSegInputs')
 ]
@@ -28,6 +26,6 @@ test_dataloader = dict(
         type=dataset_type,
         data_root=data_root,
         data_prefix=dict(
-            img_path='data/Inria/AerialImageDataset/train/img_dir/split_test',
-            seg_map_path='data/Inria/AerialImageDataset/train/ann_dir/split_test'),
+            img_path=f'{data_root}/images/test',
+            seg_map_path=f'{data_root}/annotations/test'),
         pipeline=test_pipeline))

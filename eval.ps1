@@ -8,13 +8,16 @@ param(
 )
 
 enum DatasetType {
-    iSAID
     LoveDA
     Potsdam
     Vaihingen
+    iSAID
     UAVid
     UDD5
     VDD
+    xBD
+    WHU_Building
+    Inria
 }
 
 $ErrorActionPreference = "Stop"

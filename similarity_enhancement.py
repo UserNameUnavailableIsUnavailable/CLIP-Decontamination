@@ -83,6 +83,7 @@ class SimilarityEnhancementModule(nn.Module):
         
         Args:
             attn_weights: [B*num_heads, N, N] attention weights (before softmax)
+                         where N = 1 + num_patches (includes CLS token)
             num_heads: Number of attention heads
             
         Returns:
@@ -91,20 +92,31 @@ class SimilarityEnhancementModule(nn.Module):
         if self.cached_similarity_map is None:
             return attn_weights
         
-        sim_map = self.cached_similarity_map  # [B, N, N]
+        sim_map = self.cached_similarity_map  # [B, num_patches, num_patches]
+        B_sim, num_patches, _ = sim_map.shape
+        
+        # The attention includes CLS token, so N = 1 + num_patches
+        # We need to pad similarity map with zeros for CLS token
+        # Create [B, N, N] where N = 1 + num_patches
+        N = num_patches + 1
+        device = attn_weights.device
+        dtype = attn_weights.dtype
+        
+        # Create padded similarity map with zeros for CLS row/column
+        sim_map_padded = torch.zeros(B_sim, N, N, device=device, dtype=sim_map.dtype)
+        sim_map_padded[:, 1:, 1:] = sim_map  # Put patch similarities in bottom-right
         
         # Expand similarity map to match attention shape [B*num_heads, N, N]
-        if num_heads is not None and attn_weights.shape[0] != sim_map.shape[0]:
-            B = sim_map.shape[0]
+        if num_heads is not None:
             # Repeat for each head: [B, N, N] -> [B*num_heads, N, N]
-            sim_map = sim_map.unsqueeze(1).expand(-1, num_heads, -1, -1)
-            sim_map = sim_map.reshape(B * num_heads, sim_map.shape[2], sim_map.shape[3])
+            sim_map_padded = sim_map_padded.unsqueeze(1).expand(-1, num_heads, -1, -1)
+            sim_map_padded = sim_map_padded.reshape(B_sim * num_heads, N, N)
         
         # Convert to same dtype as attention weights
-        sim_map = sim_map.to(attn_weights.dtype)
+        sim_map_padded = sim_map_padded.to(dtype)
         
         # Add weighted similarity map to attention weights
-        enhanced_attn = attn_weights + self.similarity_weight * sim_map
+        enhanced_attn = attn_weights + self.similarity_weight * sim_map_padded
         
         return enhanced_attn
     
