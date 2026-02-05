@@ -39,16 +39,14 @@ class SimilarityEnhancementModule(nn.Module):
         Compute pairwise cosine similarity map.
         
         Args:
-            features: [B, N, D] or [L, B, D] patch features
+            features: [B, N, D] patch features (BND format expected)
             scale: Optional scaling factor (like attention scale)
             
         Returns:
             similarity_map: [B, N, N] pairwise cosine similarities (scaled)
         """
-        # Handle LND format (transformer format)
-        if features.dim() == 3 and features.shape[0] < features.shape[1]:
-            # Likely LND format, convert to NLD
-            features = features.permute(1, 0, 2)
+        # Input should be in BND format [batch, num_patches, dim]
+        # No format conversion needed - caller should provide correct format
         
         # Normalize features for cosine similarity
         features_norm = F.normalize(features.float(), p=2, dim=-1)  # [B, N, D]
@@ -73,7 +71,7 @@ class SimilarityEnhancementModule(nn.Module):
         This should be called before the custom_attn computation.
         
         Args:
-            mid_features: [L, B, D] or [B, N, D] features from mid layer
+            mid_features: [B, N, D] features from mid layer (patch features, excluding CLS)
         """
         self.cached_similarity_map = self.compute_similarity_map(mid_features)
     

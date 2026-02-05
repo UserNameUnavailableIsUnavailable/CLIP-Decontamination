@@ -575,6 +575,10 @@ class VisionTransformer(nn.Module):
 
         x = x.permute(1, 0, 2)  # NLD -> LND
 
+        # Clear any stale similarity cache at the start of forward pass
+        if hasattr(self, 'similarity_enhancer') and self.similarity_enhancer is not None:
+            self.similarity_enhancer.clear_cache()
+
         # Store grid dimensions for outlier suppression
         grid_size = int(math.sqrt(x.shape[0] - 1))  # Exclude CLS token
         attn_weights = None
