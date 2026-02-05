@@ -5,23 +5,15 @@ model = dict(
     vit_type='ViT-B/16',
     model_type='Experimental',
     ignore_residual=True,
-    apply_sim_feat_up=False,
-    global_debias_factor=0.5,
+    apply_sim_feat_up=True,
     cls_token_lambda=0.0,
+    # proposed
+    global_debias_factor=0.5,
     apply_outlier_suppression=True,
     outlier_suppression_cfg=dict(
         top_k=10,
     ),
-    apply_self_attn_enhancement=False,
-    self_attn_enhancement_cfg=dict(
-        enhancement_strength=0.1,
-        min_self_attn_threshold=0.15,
-        mode='feature',  # 'feature' or 'attention'
-    ),
-    apply_layer_fusion=False,
-    layer_fusion_lambda=0.05,
-    layer_fusion_threshold=0.7,
-    apply_similarity_enhancement=False,
+    apply_similarity_enhancement=True,
     similarity_enhancement_cfg=dict(
         similarity_weight=1.0,  # Weight for self-similarity when adding to attention
         temperature=1.0,  # Temperature for similarity computation
