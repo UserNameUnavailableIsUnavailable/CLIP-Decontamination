@@ -99,7 +99,7 @@ class SimilarityEnhancementModule(nn.Module):
         N = num_patches + 1
         device = attn_weights.device
         dtype = attn_weights.dtype
-        
+            # Repeat for each head: [B, N, N] -> [B*num_heads, N, N]
         # Create padded similarity map with zeros for CLS row/column
         sim_map_padded = torch.zeros(B_sim, N, N, device=device, dtype=sim_map.dtype)
         sim_map_padded[:, 1:, 1:] = sim_map  # Put patch similarities in bottom-right
@@ -112,6 +112,9 @@ class SimilarityEnhancementModule(nn.Module):
         
         # Convert to same dtype as attention weights
         sim_map_padded = sim_map_padded.to(dtype)
+        
+        # Softmax the similarity map before adding to attention weights
+        sim_map_padded = F.softmax(sim_map_padded, dim=-1)
         
         # Add weighted similarity map to attention weights
         enhanced_attn = attn_weights + self.similarity_weight * sim_map_padded
