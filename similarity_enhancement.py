@@ -113,11 +113,8 @@ class SimilarityEnhancementModule(nn.Module):
         # Convert to same dtype as attention weights
         sim_map_padded = sim_map_padded.to(dtype)
         
-        # Softmax the similarity map before adding to attention weights
-        sim_map_padded = F.softmax(sim_map_padded, dim=-1)
-        
         # Add weighted similarity map to attention weights
-        enhanced_attn = attn_weights + self.similarity_weight * sim_map_padded
+        enhanced_attn = attn_weights + F.softmax(self.similarity_weight * sim_map_padded)
         
         return enhanced_attn
     
