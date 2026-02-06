@@ -12,7 +12,6 @@ enum DatasetType {
     Potsdam
     Vaihingen
     iSAID
-    UAVid
     UDD5
     VDD
     xBD

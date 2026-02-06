@@ -8,10 +8,10 @@ model = dict(
     apply_sim_feat_up=True,
     cls_token_lambda=0.0,
     # proposed
-    global_debias_factor=0.5,
+    global_debias_factor=0.2,
     apply_outlier_suppression=True,
     outlier_suppression_cfg=dict(
-        top_k=10,
+        top_k=30,
     ),
     apply_similarity_enhancement=True,
     similarity_enhancement_cfg=dict(
