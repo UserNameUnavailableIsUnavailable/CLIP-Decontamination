@@ -113,8 +113,13 @@ class SimilarityEnhancementModule(nn.Module):
         # Convert to same dtype as attention weights
         sim_map_padded = sim_map_padded.to(dtype)
         
-        # Add weighted similarity map to attention weights
-        enhanced_attn = attn_weights + F.softmax(self.similarity_weight * sim_map_padded)
+        # Add weighted similarity map directly to attention weights (no softmax)
+        # Softmax causes significant decay because:
+        # 1. Softmax normalizes to sum=1, which drastically reduces the magnitude
+        # 2. With N patches (~196), each softmax entry becomes ~1/N = 0.005
+        # 3. This tiny contribution barely affects the original attention weights
+        # Instead, we add the raw cosine similarity (range [-1, 1]) directly
+        enhanced_attn = attn_weights + self.similarity_weight * sim_map_padded
         
         return enhanced_attn
     
