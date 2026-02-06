@@ -84,7 +84,7 @@ def slide_crop_image(src_path, out_dir, mode, patch_H, patch_W, overlap):
 
 
 def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
-    label = mmcv.imread(src_path, channel_order='rgb')
+    label = np.asarray(Image.open(src_path).convert('RGB'))
     label = UAVid_convert_from_color(label)
     img_H, img_W = label.shape
 
@@ -123,7 +123,7 @@ def slide_crop_label(src_path, out_dir, mode, patch_H, patch_W, overlap):
                 y_end = img_H
 
             lab_patch = label[y_str:y_end, x_str:x_end]
-            lab_patch = Image.fromarray(lab_patch.astype(np.uint8), mode='P')
+            lab_patch = Image.fromarray(lab_patch.astype(np.uint8))
 
             pre_name = src_path.split('/')[-3] + '_'
             image = pre_name + osp.basename(src_path).split('.')[0] + '_' + str(

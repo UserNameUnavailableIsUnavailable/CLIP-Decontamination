@@ -894,15 +894,12 @@ class VisionTransformer(nn.Module):
                 combined_attn = self.similarity_enhancer.enhance_attention(combined_attn, num_heads)
             attn_weights = F.softmax(combined_attn, dim=-1)
         elif model_type == "Experimental":
-            # Gated QK attention
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
-            qq_gate = torch.sigmoid(qq_attn)  # [bsz*num_heads, N, N]
-            gated_attn = qq_gate * kk_attn
-            # Apply similarity enhancement before softmax
+            attn_weights = F.softmax(kk_attn + qq_attn, dim=-1)
             if cached_sim_map is not None:
-                gated_attn = self.similarity_enhancer.enhance_attention(gated_attn, num_heads)
-            attn_weights = F.softmax(gated_attn, dim=-1)
+                attn_weights = self.similarity_enhancer.enhance_attention(attn_weights, num_heads)
+            attn_weights = F.softmax(attn_weights, dim=-1)
         elif model_type == 'ClearCLIP':
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             # Apply similarity enhancement before softmax

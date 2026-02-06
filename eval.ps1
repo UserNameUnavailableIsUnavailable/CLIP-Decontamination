@@ -17,6 +17,7 @@ enum DatasetType {
     xBD
     WHU_Building
     Inria
+    UAVid
 }
 
 $ErrorActionPreference = "Stop"
