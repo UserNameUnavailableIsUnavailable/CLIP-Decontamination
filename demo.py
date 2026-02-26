@@ -1,21 +1,15 @@
 from PIL import Image
 import matplotlib.pyplot as plt
 from torchvision import transforms
-from segearth_segmentor import Segmentor
+from segmentor import SegmentorEx
 
-img = Image.open('demo/oem_koeln_50.tif')
-
-name_list = ['background', 'bareland,barren', 'grass', 'pavement', 'road',
-             'tree,forest', 'water,river', 'cropland', 'building,roof,house']
-
-with open('./configs/my_name.txt', 'w') as writers:
-    for i in range(len(name_list)):
-        if i == len(name_list)-1:
-            writers.write(name_list[i])
-        else:
-            writers.write(name_list[i] + '\n')
-writers.close()
-
+img = Image.open('visualization/img.png').convert('RGB')
+dataset = "UDD5"
+cls = []
+with open(f'configs/cls_{dataset.lower()}.txt', 'r') as f:
+    for line in f:
+        cls.append(line.strip())
+print(f"Classes: {cls}")
 
 img_tensor = transforms.Compose([
     transforms.ToTensor(),
@@ -25,28 +19,54 @@ img_tensor = transforms.Compose([
 
 img_tensor = img_tensor.unsqueeze(0).to('cuda')
 
-model = Segmentor(
+model = SegmentorEx(
     clip_type='CLIP',     # 'CLIP', 'BLIP', 'OpenCLIP', 'MetaCLIP', 'ALIP', 'SkyCLIP', 'GeoRSCLIP', 'RemoteCLIP'
     vit_type='ViT-B/16',      # 'ViT-B/16', 'ViT-L-14'
-    model_type='SegEarth',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth'
+    model_type='SegEarth',   # 'vanilla', 'MaskCLIP', 'GEM', 'SCLIP', 'ClearCLIP', 'SegEarth', 'Combined_Experimental'
     ignore_residual=True,
     apply_sim_feat_up=True,
     sim_feat_up_cfg=dict(
         model_name='jbu_one',
         model_path='simfeatup_dev/weights/xclip_jbu_one_million_aid.ckpt'),
     cls_token_lambda=-0.3,
-    name_path='./configs/my_name.txt',
+    global_debias_factor=0.5,
+    apply_outlier_suppression=True,
+    outlier_suppression_cfg=dict(top_k=10),
+    apply_similarity_enhancement=True,
+    similarity_enhancement_cfg=dict(similarity_weight=1.0, temperature=1.0, add_self_similarity=True),
+    name_path=f'configs/cls_{dataset.lower()}.txt',
     prob_thd=0.1,
 )
+
 
 seg_pred = model.predict(img_tensor, data_samples=None)
 seg_pred = seg_pred.data.cpu().numpy().squeeze(0)
 
-fig, ax = plt.subplots(1, 2, figsize=(12, 6))
-ax[0].imshow(img)
-ax[0].axis('off')
-ax[1].imshow(seg_pred, cmap='viridis')
-ax[1].axis('off')
+# Load palette
+import custom_datasets
+import numpy as np
+
+try:
+    dataset_cls = getattr(custom_datasets, f"{dataset}Dataset")
+    palette = dataset_cls.METAINFO['palette']
+except AttributeError:
+    palette = None
+    print(f"Warning: Dataset class {dataset}Dataset not found in custom_datasets.py")
+
+fig, ax = plt.subplots(1, figsize=(12, 6))
+
+if palette:
+    palette = np.array(palette)
+    # Handle ignore index if present (e.g. 255)
+    # Assuming standard 0-N class indices
+    color_seg = np.zeros((seg_pred.shape[0], seg_pred.shape[1], 3), dtype=np.uint8)
+    for label, color in enumerate(palette):
+        color_seg[seg_pred == label, :] = color
+    ax.imshow(color_seg)
+else:
+    ax.imshow(seg_pred, cmap='viridis')
+
+ax.axis('off')
 plt.tight_layout()
 # plt.show()
-plt.savefig('seg_pred.png', bbox_inches='tight')
+plt.savefig('visualization/result.png', bbox_inches='tight')

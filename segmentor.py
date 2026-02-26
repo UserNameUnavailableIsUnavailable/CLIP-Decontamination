@@ -20,6 +20,8 @@ from open_clip import tokenizer, create_model
 from BLIP.models.blip_retrieval import blip_retrieval
 import gem
 from simfeatup_dev.upsamplers import get_upsampler
+#from similarity_refiner import SimilarityRefiner
+from guided_filter_refiner import GuidedFilterRefiner
 from CTD import cluster_patch_tokens_dbscan, adaptive_debiasing
 
 @MODELS.register_module()
@@ -66,6 +68,7 @@ class SegmentorEx(BaseSegmentor):
             std=[68.501, 66.632, 70.323],
             bgr_to_rgb=True)
         super().__init__(data_preprocessor=data_preprocessor)
+        print(f"RECEIVED IN SEGMENTOR_EX: apply_similarity_enhancement={apply_similarity_enhancement}")
         if clip_type == 'CLIP':
             if 'B' in vit_type:
                 self.net = create_model('ViT-B/16', pretrained='openai', precision='fp16')
@@ -195,29 +198,19 @@ class SegmentorEx(BaseSegmentor):
         # Similarity-based attention enhancement: adds self-similarity map to attention weights
         self.apply_similarity_enhancement = apply_similarity_enhancement
         if apply_similarity_enhancement:
-            from similarity_enhancement import SimilarityEnhancementModule
+            # Replaced internal O(N^2) Similarity Refiner with O(N) Guided Filter Refiner
+            # Significantly reduces memory usage and improves boundary adherence.
+            # Default params: radius=2, eps=1e-2
             
-            default_sim_cfg = dict(
-                similarity_weight=1.0,  # Weight for similarity map when adding to attention
-                temperature=1.0,  # Temperature for similarity computation
-                add_self_similarity=True,  # Whether to include diagonal in similarity map
-            )
+            radius = 2
+            eps = 1e-2
+            
             if similarity_enhancement_cfg:
-                default_sim_cfg.update(similarity_enhancement_cfg)
-            
-            enhancer = SimilarityEnhancementModule(
-                similarity_weight=default_sim_cfg['similarity_weight'],
-                temperature=default_sim_cfg['temperature'],
-                add_self_similarity=default_sim_cfg['add_self_similarity'],
-            ).to(device)
-            
-            # Set enhancer on vision transformer
-            if self.clip_type != 'BLIP':
-                self.net.visual.similarity_enhancer = enhancer
-            else:
-                self.net.visual_encoder.similarity_enhancer = enhancer
-            
-            print(f"[Similarity Enhancement] Enabled: adds self-similarity to attention (weight={default_sim_cfg['similarity_weight']}, temp={default_sim_cfg['temperature']})")
+                radius = similarity_enhancement_cfg.get('radius', 2)
+                eps = similarity_enhancement_cfg.get('eps', 1e-2)
+
+            self.similarity_enhancer = GuidedFilterRefiner(feature_dim=64, num_classes=15, radius=radius, eps=eps)
+            print(f"[Similarity Enhancement] Enabled: O(N) Guided Filter Refinement (radius={radius}, eps={eps})")
         
         # Self-Attention Enhancement: Boosts self-attention for tokens with weak self-attention
         self.apply_self_attn_enhancement = apply_self_attn_enhancement
@@ -372,7 +365,37 @@ class SegmentorEx(BaseSegmentor):
             image_features = image_features.view(1, self.feat_dim, image_w * image_h).permute(0, 2, 1)
 
         image_features /= image_features.norm(dim=-1, keepdim=True)
-        logits = image_features @ self.query_features.T
+
+        # Apply Post-Processing Similarity Refinement (NEW)
+        if self.apply_similarity_enhancement and hasattr(self, 'similarity_enhancer'):
+             logits = image_features @ self.query_features.T
+             
+             # Reshape to [B, C, H, W] for Guided Filter
+             # image_features is [B, N, D], but N depends on sim_feat_up
+             B, N, D = image_features.shape
+             C = logits.shape[-1]
+             
+             # Determine spatial dimensions
+             if self.apply_sim_feat_up:
+                 sp_h, sp_w = image_h, image_w
+             else:
+                 sp_h, sp_w = feature_h, feature_w
+             
+             # Verify consistency
+             if N != sp_h * sp_w:
+                 # Fallback if dimensions mismatch (e.g. padding or other transforms)
+                 # Guided Filter requires 2D, so we might skip or try to reshape
+                 print(f"Warning: GuidedFilter skipping due to shape mismatch: N={N} vs {sp_h}x{sp_w}")
+             else:
+                 logits_spatial = logits.permute(0, 2, 1).view(B, C, sp_h, sp_w)
+                 feats_spatial = image_features.permute(0, 2, 1).view(B, D, sp_h, sp_w)
+                 
+                 logits_refined = self.similarity_enhancer(logits_spatial, feats_spatial)
+                 
+                 # Flatten back to [B, N, C]
+                 logits = logits_refined.view(B, C, N).permute(0, 2, 1)
+        else:
+             logits = image_features @ self.query_features.T
 
         # SegEarth-OV debiasing from logits (optional, controlled by cls_token_lambda)
         if self.cls_token_lambda != 0:

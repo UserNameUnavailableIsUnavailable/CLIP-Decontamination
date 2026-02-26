@@ -17,6 +17,11 @@ from open_clip import tokenizer, create_model
 from BLIP.models.blip_retrieval import blip_retrieval
 import gem
 from simfeatup_dev.upsamplers import get_upsampler
+#from similarity_enhancement import SimilarityEnhancementModule
+try:
+    from similarity_refiner import SimilarityRefiner
+except ImportError:
+    from .similarity_refiner import SimilarityRefiner
 
 
 @MODELS.register_module()
@@ -35,6 +40,7 @@ class Segmentor(BaseSegmentor):
                  cls_token_lambda=0,
                  bg_idx=0,
                  apply_sim_feat_up=True,
+                 apply_similarity_enhancement=False,
                  sim_feat_up_cfg=dict(
                      model_name='jbu_one',
                      model_path='your/model/path')):
@@ -42,7 +48,14 @@ class Segmentor(BaseSegmentor):
             mean=[122.771, 116.746, 104.094],
             std=[68.501, 66.632, 70.323],
             bgr_to_rgb=True)
+        print(f"RECEIVED IN SEGEARTH_SEGMENTOR: apply_similarity_enhancement={apply_similarity_enhancement}")
         super().__init__(data_preprocessor=data_preprocessor)
+        self.apply_similarity_enhancement = apply_similarity_enhancement
+        if self.apply_similarity_enhancement:
+            print("[SegEarth-OV] Similarity Refinement (Post-prop) Enabled")
+            # Initialize refiner - Tuned parameters (alpha=0.4, temp=0.15) to reduce peaky behavior
+            self.similarity_enhancer = SimilarityRefiner(alpha=0.4, temperature=0.15)
+            
         if clip_type == 'CLIP':
             if 'B' in vit_type:
                 self.net = create_model('ViT-B/16', pretrained='openai', precision='fp16')
@@ -106,6 +119,12 @@ class Segmentor(BaseSegmentor):
             self.net = self.net.model
 
         self.net.eval().to(device)
+        
+        # Attach similarity enhancer to visual transformer if enabled
+        # Post-processing refinement does not need attachment to visual transformer
+        #if self.apply_similarity_enhancement and hasattr(self.net, 'visual'):
+        #    self.net.visual.similarity_enhancer = self.similarity_enhancer
+            
         self.tokenizer = tokenizer.tokenize
 
         self.clip_type = clip_type
@@ -170,7 +189,13 @@ class Segmentor(BaseSegmentor):
         elif self.model_type == 'GEM':
             image_features = self.net.visual(img)
         else:
-            image_features = self.net.encode_image(img, self.model_type, self.ignore_residual, self.output_cls_token)
+            image_features = self.net.encode_image(
+                img, 
+                self.model_type, 
+                self.ignore_residual, 
+                self.output_cls_token,
+                apply_similarity_enhancement=self.apply_similarity_enhancement
+            )
             
         if self.output_cls_token:
             image_cls_token, image_features = image_features
@@ -187,7 +212,15 @@ class Segmentor(BaseSegmentor):
             image_features = image_features.view(1, self.feat_dim, image_w * image_h).permute(0, 2, 1)
 
         image_features /= image_features.norm(dim=-1, keepdim=True)
-        logits = image_features @ self.query_features.T
+        # Apply similarity refinement if enabled (Post-Processing)
+        if self.apply_similarity_enhancement and hasattr(self, 'similarity_enhancer'):
+            # Enhances logits using feature similarity
+             # image_features: [B, N, D], used for similarity
+             # But logits are computed next. We can compute logits first, then refine.
+             logits = image_features @ self.query_features.T
+             logits = self.similarity_enhancer(logits, image_features)
+        else:
+             logits = image_features @ self.query_features.T
 
         if self.output_cls_token:
             logits = logits + cls_logits * self.cls_token_lambda

@@ -75,53 +75,110 @@ class SimilarityEnhancementModule(nn.Module):
         """
         self.cached_similarity_map = self.compute_similarity_map(mid_features)
     
-    def enhance_attention(self, attn_weights, num_heads=None):
+    def enhance_attention_logits(self, attn_logits, num_heads=None):
         """
-        Enhance attention weights by adding cached similarity map.
+        Enhance attention logits (pre-softmax) using the cached similarity map.
+        
+        This aligns with SegEarth/SC-CLIP/SFP approach of modifying the logits sum directly,
+        which is more numerically stable and preserves distribution properties better than
+        averaging probabilities.
         
         Args:
-            attn_weights: [B*num_heads, N, N] attention weights (before softmax)
-                         where N = 1 + num_patches (includes CLS token)
+            attn_logits: [B*num_heads, N, N] attention logits
             num_heads: Number of attention heads
             
         Returns:
-            enhanced_attn: [B*num_heads, N, N] enhanced attention weights
+            attn_logits: [B*num_heads, N, N] Enhanced attention logits
         """
         if self.cached_similarity_map is None:
-            return attn_weights
+            return attn_logits
+            
+        sim_map = self.cached_similarity_map.clone()  # [B, num_patches, num_patches]
+        B, num_patches, _ = sim_map.shape
         
-        sim_map = self.cached_similarity_map  # [B, num_patches, num_patches]
+        # Determine if we need to pad for CLS token
+        # attn_logits is [B*num_heads, N_attn, N_attn]
+        N_attn = attn_logits.shape[-1]
+        
+        # Prepare Sim Map
+        # 1. Expand to heads
+        if num_heads is not None:
+            sim_map = sim_map.unsqueeze(1).repeat(1, num_heads, 1, 1) # [B, num_heads, Np, Np]
+            sim_map = sim_map.view(-1, num_patches, num_patches)      # [B*num_heads, Np, Np]
+        
+        # 2. Pad to match N_attn (handle CLS token)
+        if N_attn == num_patches + 1:
+            # Create padded map with 0s for CLS interactions
+            padded_sim = torch.zeros(sim_map.shape[0], N_attn, N_attn, 
+                                     device=sim_map.device, dtype=sim_map.dtype)
+            
+            # Place similarity map in bottom-right (Patch-Patch interactions)
+            padded_sim[:, 1:, 1:] = sim_map
+            
+            # For CLS-Patch and Patch-CLS, we leave as 0
+            # This means we don't bias these interactions, letting original attention decide
+            sim_map = padded_sim
+            
+        elif N_attn != num_patches:
+            # Mismatch size, return original
+            return attn_logits
+
+        # Apply Enhancement
+        # SFP/SegEarth Logic: combined_logits = original_logits + lambda * sim_map
+        # Using similarity_weight parameter
+        sim_map = sim_map.to(attn_logits.dtype)
+        
+        # Add to logits
+        # This biases the attention towards semantically similar patches
+        return attn_logits + self.similarity_weight * sim_map
+    
+    def enhance_attention(self, attn_weights, num_heads=None):
+        """
+        Legacy method for enhancing probabilities (post-softmax).
+        Retained for compatibility but enhance_attention_logits is preferred.
+        """
+        # ... implementation ...
+        return None
+        if self.cached_similarity_map is None:
+            return None
+        
+        sim_map = self.cached_similarity_map.clone()  # [B, num_patches, num_patches]
         B_sim, num_patches, _ = sim_map.shape
         
-        # The attention includes CLS token, so N = 1 + num_patches
-        # We need to pad similarity map with zeros for CLS token
-        # Create [B, N, N] where N = 1 + num_patches
-        N = num_patches + 1
-        device = attn_weights.device
-        dtype = attn_weights.dtype
-            # Repeat for each head: [B, N, N] -> [B*num_heads, N, N]
-        # Create padded similarity map with zeros for CLS row/column
-        sim_map_padded = torch.zeros(B_sim, N, N, device=device, dtype=sim_map.dtype)
-        sim_map_padded[:, 1:, 1:] = sim_map  # Put patch similarities in bottom-right
+        # SC-CLIP processing: mean-center, scale by 3×, clip negatives to -inf
+        sim_map = (sim_map - torch.mean(sim_map)) * 3.0
+        sim_map[sim_map < 0.0] = float('-inf')
         
-        # Expand similarity map to match attention shape [B*num_heads, N, N]
+        # Repeat for each head: [B, N_p, N_p] -> [B*num_heads, N_p, N_p]
         if num_heads is not None:
-            # Repeat for each head: [B, N, N] -> [B*num_heads, N, N]
-            sim_map_padded = sim_map_padded.unsqueeze(1).expand(-1, num_heads, -1, -1)
-            sim_map_padded = sim_map_padded.reshape(B_sim * num_heads, N, N)
+            sim_map = sim_map.repeat(num_heads, 1, 1)  # [B*num_heads, num_patches, num_patches]
         
         # Convert to same dtype as attention weights
-        sim_map_padded = sim_map_padded.to(dtype)
+        sim_map = sim_map.to(attn_weights.dtype)
         
-        # Add weighted similarity map directly to attention weights (no softmax)
-        # Softmax causes significant decay because:
-        # 1. Softmax normalizes to sum=1, which drastically reduces the magnitude
-        # 2. With N patches (~196), each softmax entry becomes ~1/N = 0.005
-        # 3. This tiny contribution barely affects the original attention weights
-        # Instead, we add the raw cosine similarity (range [-1, 1]) directly
-        enhanced_attn = attn_weights + self.similarity_weight * sim_map_padded
+        # Apply softmax to get similarity-based attention weights
+        sim_attn = F.softmax(sim_map, dim=-1)  # [B*num_heads, num_patches, num_patches]
         
-        return enhanced_attn
+        # Determine if we need to pad for CLS token
+        N_attn = attn_weights.shape[1]  # Total tokens in attention (may include CLS)
+        if N_attn == num_patches:
+            # No CLS token in attention, return as-is
+            return sim_attn
+        elif N_attn == num_patches + 1:
+            # CLS token present at position 0, pad similarity attention
+            BH = sim_attn.shape[0]
+            device = sim_attn.device
+            dtype = sim_attn.dtype
+            
+            # Create padded [BH, N, N] with zeros for CLS row/column
+            sim_attn_padded = torch.zeros(BH, N_attn, N_attn, device=device, dtype=dtype)
+            sim_attn_padded[:, 1:, 1:] = sim_attn  # Patch-patch similarities in bottom-right
+            # CLS row and column remain zero — similarity doesn't affect CLS interactions
+            
+            return sim_attn_padded
+        else:
+            # Unexpected shape, return None to fall back to base attention
+            return None
     
     def clear_cache(self):
         """Clear the cached similarity map."""

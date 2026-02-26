@@ -535,7 +535,7 @@ class VisionTransformer(nn.Module):
 
         return pooled, tokens
 
-    def forward(self, x: torch.Tensor, model_type: str = 'ClearCLIP', ignore_residual=True, output_cls_token=False, last_n_layers=1, apply_cos=False, som_module=None, apply_layer_fusion=False, layer_fusion_lambda=0.5, layer_fusion_threshold=0.7, apply_similarity_enhancement=False):
+    def forward(self, x: torch.Tensor, model_type: str = 'ClearCLIP', ignore_residual=True, output_cls_token=False, last_n_layers=1, apply_cos=False, som_module=None, apply_layer_fusion=False, layer_fusion_lambda=0.5, layer_fusion_threshold=0.7, apply_similarity_enhancement=False, return_attentions=False):
         """
         Forward pass of the Vision Transformer.
         
@@ -551,10 +551,12 @@ class VisionTransformer(nn.Module):
             layer_fusion_lambda: Maximum fusion weight (0-1). Actual weight per token is λ * sim * confidence
             layer_fusion_threshold: Only fuse tokens with similarity > threshold (0-1)
             apply_similarity_enhancement: Whether to apply similarity-based feature enhancement from mid-layer
+            return_attentions: Whether to return attention weights for visualization
             
         Returns:
             tokens: Patch tokens [B, num_patches, C]
             pooled: (Optional) CLS token if output_cls_token=True
+            attentions: (Optional) List of attention maps if return_attentions=True
         """
         B, nc, w, h = x.shape
         x = self.conv1(x)  # shape = [*, width, grid, grid]
@@ -575,10 +577,6 @@ class VisionTransformer(nn.Module):
 
         x = x.permute(1, 0, 2)  # NLD -> LND
 
-        # Clear any stale similarity cache at the start of forward pass
-        if hasattr(self, 'similarity_enhancer') and self.similarity_enhancer is not None:
-            self.similarity_enhancer.clear_cache()
-
         # Store grid dimensions for outlier suppression
         grid_size = int(math.sqrt(x.shape[0] - 1))  # Exclude CLS token
         attn_weights = None
@@ -587,12 +585,13 @@ class VisionTransformer(nn.Module):
         # Track accumulated attention maps for attention-based layer fusion
         attn_accumulated = None if apply_layer_fusion else None
         current_attn = None
+        
+        # Store all attention maps if requested
+        all_attentions = []
 
         for idx, blk in enumerate(self.transformer.resblocks[:-last_n_layers]):
-            # Capture mid-layer features (e.g., layer 6 out of 12 for ViT-B/16)
-            mid_layer_idx = len(self.transformer.resblocks[:-last_n_layers]) // 2
-            if idx == mid_layer_idx and apply_similarity_enhancement:
-                mid_layer_features = x.clone()  # [L, N, D]
+            # Capture mid-layer features - REMOVED for Post-Processing approach
+            # Using final features for refinement is safer.
             
             # For attention-based layer fusion, always capture attention maps
             if apply_layer_fusion:
@@ -605,19 +604,23 @@ class VisionTransformer(nn.Module):
                     # Exponential moving average fusion of attention maps
                     # current_attn: [N*num_heads, L, L]
                     attn_accumulated = layer_fusion_lambda * attn_accumulated + (1 - layer_fusion_lambda) * current_attn
+                
+                if return_attentions:
+                    all_attentions.append(current_attn)
+                    
             # Capture attention weights from second-to-last block for outlier detection
             elif idx == len(self.transformer.resblocks[:-last_n_layers]) - 1 and hasattr(self, 'outlier_suppressor') and self.outlier_suppressor is not None:
                 x, attn_weights = blk(x, need_weights=True)
+                if return_attentions:
+                    all_attentions.append(attn_weights)
+            elif return_attentions:
+                x, current_attn = blk(x, need_weights=True)
+                all_attentions.append(current_attn)
             else:
                 x = blk(x)
 
-        # Cache similarity map for attention enhancement (before custom_attn is called)
-        if hasattr(self, 'similarity_enhancer') and self.similarity_enhancer is not None and mid_layer_features is not None:
-            # Convert to NLD format and exclude CLS token for similarity computation
-            mid_nld = mid_layer_features.permute(1, 0, 2)  # [B, L, D]
-            mid_patches = mid_nld[:, 1:, :]  # [B, num_patches, D] - exclude CLS
-            self.similarity_enhancer.cache_similarity_map(mid_patches)
-
+        # Cache similarity map - REMOVED
+        
         output = 0
         total_layers = len(self.transformer.resblocks)
         for i, blk in enumerate(self.transformer.resblocks[-last_n_layers:]):
@@ -625,23 +628,55 @@ class VisionTransformer(nn.Module):
             is_last_layer = (global_idx == total_layers - 1)
             
             if ignore_residual:
+                # Need to handle output calculation correctly with attention saving?
+                # The existing code is a bit complex here with custom_attn overriding MLP? 
+                # No, custom_attn usually adds to residual.
+                
+                if return_attentions:
+                    # Can't easily use custom_attn and get weights without modifying it too possibly?
+                    # The current block logic seems to mix execution paths.
+                    # Assuming we just want standard attention if custom_attn is used or not.
+                    # But wait, blk.attn is used inside custom_attn potentially?
+                    # Let's see custom_attn impl.
+                    pass 
+                
+                if apply_layer_fusion:
+                     # ... existing logic ...
+                     pass
+                
+                # Simplified handling for visualization:
+                # If we are visualizing, we might not care about 'custom_attn' logic fully holding up 
+                # unless custom_attn IS the attention we want.
+                # However, ResBlock.forward calls self.attn. 
+                # custom_attn is an ADDITION: x + custom_attn(...)
+                
                 output += self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
+                
                 # For attention-based layer fusion, capture attention maps
                 if apply_layer_fusion:
                     x, current_attn = blk(x, need_weights=True)
-                    
-                    # Apply attention-based layer fusion: A_{l+1} = λA_l + (1-λ)A_{l+1}
                     if attn_accumulated is None:
                         attn_accumulated = current_attn
                     else:
                         attn_accumulated = layer_fusion_lambda * attn_accumulated + (1 - layer_fusion_lambda) * current_attn
+                    
+                    if return_attentions:
+                        all_attentions.append(current_attn)
+                elif return_attentions:
+                    x, current_attn = blk(x, need_weights=True)
+                    all_attentions.append(current_attn)
                 else:
                     x = blk(x)
             else:
                 x_out = x + self.custom_attn(blk.attn, blk.ln_1(x), model_type=model_type)
                 x_out = x_out + blk.mlp(blk.ln_2(x_out))
                 output += x_out
-                x = blk(x)
+                
+                if return_attentions:
+                    x, current_attn = blk(x, need_weights=True)
+                    all_attentions.append(current_attn)
+                else:
+                    x = blk(x)
         
         # Process fused attention maps: mask outliers and normalize
         if apply_layer_fusion and attn_accumulated is not None and hasattr(self, 'outlier_suppressor') and self.outlier_suppressor is not None:
@@ -690,9 +725,7 @@ class VisionTransformer(nn.Module):
             output = output_weighted.permute(1, 0, 2)  # [L, N, D]
 
 
-        # Clear similarity cache after attention computation (cache was used in custom_attn)
-        if hasattr(self, 'similarity_enhancer') and self.similarity_enhancer is not None:
-            self.similarity_enhancer.clear_cache()
+        # Clear similarity cache - REMOVED
 
         # Apply self-attention enhancement if enabled (before outlier suppression)
         if hasattr(self, 'self_attn_enhancer') and self.self_attn_enhancer is not None and attn_weights is not None:
@@ -770,8 +803,12 @@ class VisionTransformer(nn.Module):
             tokens = tokens @ self.proj
 
         if output_cls_token:
+            if return_attentions:
+                return pooled, tokens, all_attentions
             return pooled, tokens
         
+        if return_attentions:
+            return tokens, all_attentions
         return tokens
 
     def interpolate_pos_encoding(self, x, w, h):
@@ -852,14 +889,12 @@ class VisionTransformer(nn.Module):
             qk_attn_weights = qk_attn_weights.view(bsz, num_heads, num_tokens, num_tokens)
 
         # Check if similarity enhancement is enabled
-        has_sim_enhancer = hasattr(self, 'similarity_enhancer') and self.similarity_enhancer is not None
-        cached_sim_map = self.similarity_enhancer.cached_similarity_map if has_sim_enhancer else None
+        # REMOVED: Similarity Enhancement is now post-processing only.
+        has_sim_enhancer = False # hasattr(self, 'similarity_enhancer') and self.similarity_enhancer is not None
+        cached_sim_map = None # self.similarity_enhancer.cached_similarity_map if has_sim_enhancer else None
 
         if model_type == 'vanilla':
             qk_attn = torch.bmm(q, k.transpose(1, 2)) * scale
-            # Apply similarity enhancement before softmax
-            if cached_sim_map is not None:
-                qk_attn = self.similarity_enhancer.enhance_attention(qk_attn, num_heads)
             attn_weights = F.softmax(qk_attn, dim=-1)
         elif model_type == 'MaskCLIP':
             mask = torch.empty(q.shape[1], q.shape[1], dtype=q.dtype).to(q.device)
@@ -870,42 +905,65 @@ class VisionTransformer(nn.Module):
         elif model_type == 'SCLIP':
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
-            # Apply similarity enhancement before softmax
+            # Averaging instead of summing to maintain scale
+            base_attn = 0.5 * (F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1))
+            
             if cached_sim_map is not None:
-                qq_attn = self.similarity_enhancer.enhance_attention(qq_attn, num_heads)
-                kk_attn = self.similarity_enhancer.enhance_attention(kk_attn, num_heads)
-            attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1)
+                sim_attn = self.similarity_enhancer.enhance_attention(kk_attn, num_heads)
+                if sim_attn is not None:
+                    # Protection for CLS token
+                    N = base_attn.shape[-1]
+                    mask = torch.zeros((1, N, N), device=base_attn.device, dtype=base_attn.dtype)
+                    if N > 1:
+                        mask[:, 1:, 1:] = 1.0
+                    
+                    attn_weights = mask * 0.5 * (sim_attn + base_attn) + (1.0 - mask) * base_attn
+                else:
+                    attn_weights = base_attn
+            else:
+                attn_weights = base_attn
         elif model_type == 'SegEarth':
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
             vv_attn = torch.bmm(v, v.transpose(1, 2)) * scale
-            # Apply similarity enhancement before softmax
-            if cached_sim_map is not None:
-                qq_attn = self.similarity_enhancer.enhance_attention(qq_attn, num_heads)
-                kk_attn = self.similarity_enhancer.enhance_attention(kk_attn, num_heads)
-                vv_attn = self.similarity_enhancer.enhance_attention(vv_attn, num_heads)
-            attn_weights = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1) + F.softmax(vv_attn, dim=-1)
+            # SegEarth sums the softmaxed attentions
+            base_attn = F.softmax(qq_attn, dim=-1) + F.softmax(kk_attn, dim=-1) + F.softmax(vv_attn, dim=-1)
+            attn_weights = base_attn
+
         elif model_type == "SFP":
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
             kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
             combined_attn = 0.5 * (qq_attn + kk_attn)
-            # Apply similarity enhancement before softmax
+            original_attn = F.softmax(combined_attn, dim=-1)
+            
             if cached_sim_map is not None:
-                combined_attn = self.similarity_enhancer.enhance_attention(combined_attn, num_heads)
-            attn_weights = F.softmax(combined_attn, dim=-1)
-        elif model_type == "Experimental":
-            kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
-            qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
-            attn_weights = F.softmax(kk_attn + qq_attn, dim=-1)
-            if cached_sim_map is not None:
-                attn_weights = self.similarity_enhancer.enhance_attention(attn_weights, num_heads)
-            attn_weights = F.softmax(attn_weights, dim=-1)
+                sim_attn = self.similarity_enhancer.enhance_attention(combined_attn, num_heads)
+                if sim_attn is not None:
+                    N = original_attn.shape[-1]
+                    mask = torch.zeros((1, N, N), device=original_attn.device, dtype=original_attn.dtype)
+                    if N > 1: mask[:, 1:, 1:] = 1.0
+                    
+                    attn_weights = mask * 0.5 * (sim_attn + original_attn) + (1.0 - mask) * original_attn
+                else:
+                    attn_weights = original_attn
+            else:
+                attn_weights = original_attn
         elif model_type == 'ClearCLIP':
             qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
-            # Apply similarity enhancement before softmax
+            original_attn = F.softmax(qq_attn, dim=-1)
+            
             if cached_sim_map is not None:
-                qq_attn = self.similarity_enhancer.enhance_attention(qq_attn, num_heads)
-            attn_weights = F.softmax(qq_attn, dim=-1)
+                sim_attn = self.similarity_enhancer.enhance_attention(qq_attn, num_heads)
+                if sim_attn is not None:
+                    N = original_attn.shape[-1]
+                    mask = torch.zeros((1, N, N), device=original_attn.device, dtype=original_attn.dtype)
+                    if N > 1: mask[:, 1:, 1:] = 1.0
+                    
+                    attn_weights = mask * 0.5 * (sim_attn + original_attn) + (1.0 - mask) * original_attn
+                else:
+                    attn_weights = original_attn
+            else:
+                attn_weights = original_attn
         elif model_type in ['NACLIP', 'NOnly', 'GAV']:
             self.gaussian_std = 1.0 # 5.0
             self.addition_cache = dict()
@@ -930,6 +988,21 @@ class VisionTransformer(nn.Module):
                 raise NotImplemented
             attn_weights += omega
             attn_weights = F.softmax(attn_weights, dim=-1)
+        elif model_type == 'Experimental':
+            # Simplified Experimental Mode: "SFP+"
+            # Base: Feature Purification (SFP) using softmax(0.5 * (QQ + KK))
+            
+            # 1. Compute pairwise similarities
+            # QQ: Query-Query similarity
+            qq_attn = torch.bmm(q, q.transpose(1, 2)) * scale
+            # KK: Key-Key similarity
+            kk_attn = torch.bmm(k, k.transpose(1, 2)) * scale
+            
+            # 2. Combine
+            combined_logits = 0.5 * (qq_attn + kk_attn)
+            
+            # 3. Apply Softmax
+            attn_weights = F.softmax(combined_logits, dim=-1)
 
         attn_output = torch.bmm(attn_weights, v)
         attn_output = attn_output.transpose(0, 1).contiguous().view(-1, bsz, embed_dim)

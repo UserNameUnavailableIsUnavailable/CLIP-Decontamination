@@ -3,15 +3,15 @@ model = dict(
     type='SegmentorEx',
     clip_type='CLIP',
     vit_type='ViT-B/16',
-    model_type='Experimental',
+    model_type='SegEarth',
     ignore_residual=True,
     apply_sim_feat_up=True,
-    cls_token_lambda=0.0,
+    cls_token_lambda=0.3,
     # proposed
-    global_debias_factor=0.2,
+    global_debias_factor=1.0,
     apply_outlier_suppression=True,
     outlier_suppression_cfg=dict(
-        top_k=30,
+        top_k=50,
     ),
     apply_similarity_enhancement=True,
     similarity_enhancement_cfg=dict(

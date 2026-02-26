@@ -271,18 +271,30 @@ class CLIP(nn.Module):
                      apply_layer_fusion: bool = False,
                      layer_fusion_lambda: float = 0.5,
                      layer_fusion_threshold: float = 0.7,
-                     apply_similarity_enhancement: bool = False):
+                     apply_similarity_enhancement: bool = False,
+                     return_attentions: bool = False):
         features = self.visual(
             image, model_type, ignore_residual, output_cls_token,
             apply_layer_fusion=apply_layer_fusion,
             layer_fusion_lambda=layer_fusion_lambda,
             layer_fusion_threshold=layer_fusion_threshold,
-            apply_similarity_enhancement=apply_similarity_enhancement
+            apply_similarity_enhancement=apply_similarity_enhancement,
+            return_attentions=return_attentions
         )
         if output_cls_token:
+            if return_attentions:
+                 cls_token, features, attentions = features
+                 return (F.normalize(cls_token, dim=-1) if normalize else cls_token,
+                         F.normalize(features, dim=-1) if normalize else features,
+                         attentions)
             cls_token, features = features
             return F.normalize(cls_token, dim=-1) if normalize else cls_token, \
                 F.normalize(features, dim=-1) if normalize else features
+        
+        if return_attentions:
+             features, attentions = features
+             return (F.normalize(features, dim=-1) if normalize else features, attentions)
+        
         return F.normalize(features, dim=-1) if normalize else features
 
     def encode_text(self, text, normalize: bool = False):
